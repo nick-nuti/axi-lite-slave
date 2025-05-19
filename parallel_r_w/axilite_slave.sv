@@ -45,10 +45,10 @@ module axilite_slave #(
 );
 
 // AXI FSM ---------------------------------------------------
-    localparam ADDRESS          = 3'b0001;
-    localparam WRITE            = 3'b0010;
-    localparam WRITE_RESPONSE   = 3'b0100;
-    localparam READ_RESPONSE    = 3'b1000;
+    localparam ADDRESS          = 4'b0001;
+    localparam WRITE            = 4'b0010;
+    localparam WRITE_RESPONSE   = 4'b0100;
+    localparam READ_RESPONSE    = 4'b1000;
     
     wire system_w_ready;
     wire system_r_ready;
