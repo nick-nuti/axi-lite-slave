@@ -1,3 +1,57 @@
+/* // Instantiation template
+axilite_s #(
+    .ADDR_W(32), 
+    .DATA_W(64)
+) as0 
+(
+    .aclk(),
+    .aresetn(),
+
+// axilite write
+    .s_axi_awaddr(),
+    .s_axi_awprot(),
+    .s_axi_awvalid(),
+    .s_axi_awready(),
+    .s_axi_wdata(),
+    .s_axi_wstrb(),
+    .s_axi_wvalid(),
+    .s_axi_wready(),
+    .s_axi_bresp(),
+    .s_axi_bvalid(),
+    .s_axi_bready(),
+// axilite read
+    .s_axi_araddr(),
+    .s_axi_arprot(),
+    .s_axi_arvalid(),
+    .s_axi_arready(),
+    .s_axi_rready(),
+    .s_axi_rdata(),
+    .s_axi_rvalid(),
+    .s_axi_rresp(),
+// user write
+    .w_ready_to_axi(),
+    .w_valid_from_axi(),
+    
+    .w_addr_from_axi(),
+    .w_data_from_axi(),
+    .w_strb_from_axi(),
+
+    .b_ready_from_axi(),
+    .b_valid_to_axi(),
+
+    .b_resp_to_axi(),
+// user read
+    .ar_ready_to_axi(),
+    .ar_valid_from_axi(),
+
+    .ar_addr_from_axi(),
+    .r_ready_from_axi(),
+    .r_valid_to_axi(),
+
+    .r_data_to_axi(),
+    .r_resp_to_axi()
+);
+*/
 
 module axilite_s #(
     parameter ADDR_W=32,
