@@ -1,7 +1,9 @@
-/* // Instantiation template
+/*
 axilite_s #(
     .ADDR_W(32), 
-    .DATA_W(64)
+    .DATA_W(64),
+    .AUTO_ALIGN(1),
+    .MEM_BOUNDARY_BYTES(4096)
 ) as0 
 (
     .aclk(),
@@ -55,7 +57,9 @@ axilite_s #(
 
 module axilite_s #(
     parameter ADDR_W=32,
-    parameter DATA_W=64
+    parameter DATA_W=64,
+    parameter AUTO_ALIGN=1,
+    parameter MEM_BOUNDARY_BYTES=4096
 )
 (
     aclk,
@@ -160,16 +164,32 @@ module axilite_s #(
     input  logic [DATA_W-1:0]   r_data_to_axi;
     input  logic [RESP_W-1:0]   r_resp_to_axi;
 
+    localparam ALIGN_TRANSACTION = (AUTO_ALIGN > 0) ? 1 : 0;
+    
+    localparam MEM_BOUNDARY_BYTES_CLOG2 = $clog2(MEM_BOUNDARY_BYTES);
+
+    localparam DATA_W_BYTES = DATA_W / 8;
+    localparam DATA_W_BYTES_CLOG2 = $clog2(DATA_W_BYTES);
 
 // write handling
     logic awaddr_received, wdata_received, bresp_received;
     logic [ADDR_W-1:0] awaddr_hold;
     logic [DATA_W-1:0] wdata_hold;
     logic [STRB_W-1:0] wstrb_hold;
-
     logic [RESP_W-1:0] bresp_hold;
 
+    // auto align components
+    logic wdata_raw_received;
+    logic [DATA_W-1:0] wdata_raw_hold;
+    logic [STRB_W-1:0] wstrb_raw_hold;
+    logic [DATA_W_BYTES_CLOG2-1:0] awaddr_raw_align;
+
     logic wlock;
+
+    logic [MEM_BOUNDARY_BYTES_CLOG2:0] w_boundary_check;
+    logic w_boundary_violation;
+
+    logic w_error_detected;
 
     always_ff @ (posedge aclk)
     begin
@@ -182,6 +202,11 @@ module axilite_s #(
             wdata_hold      <= 'h0;
             wstrb_hold      <= 'h0;
 
+            // auto align components
+            wdata_raw_received  <= 1'b0;
+            wdata_raw_hold      <= 'h0;
+            wstrb_raw_hold      <= 'h0;
+
             bresp_received  <= 1'b0;
             bresp_hold      <= 'h0;
 
@@ -190,29 +215,70 @@ module axilite_s #(
 
         else
         begin
-        
-        // command
+        // waddr
             if(s_axi_awvalid && s_axi_awready)
             begin
                 awaddr_received <= 1'b1;
                 awaddr_hold     <= s_axi_awaddr;
             end
             
-            else if(w_valid_from_axi && w_ready_to_axi)
+            else if((w_valid_from_axi && w_ready_to_axi) || w_error_detected)
             begin
                 awaddr_received <= 1'b0;
             end
 
-            if(s_axi_wvalid && s_axi_wready)
+        // wdata auto align
+            if(ALIGN_TRANSACTION)
             begin
-                wdata_received  <= 1'b1;
-                wdata_hold      <= s_axi_wdata;
-                wstrb_hold      <= s_axi_wstrb;
+                if(s_axi_wvalid && s_axi_wready)
+                begin
+                    if(awaddr_received)
+                    begin
+                        wdata_received  <= 1'b1;
+                        wdata_hold      <= s_axi_wdata >> (awaddr_raw_align*8);
+                        wstrb_hold      <= s_axi_wstrb >> awaddr_raw_align;
+                    end
+
+                    else
+                    begin
+                        wdata_raw_received  <= 1'b1;
+                        wdata_raw_hold      <= s_axi_wdata;
+                        wstrb_raw_hold      <= s_axi_wstrb;
+                    end
+                end
+
+                else if(wdata_raw_received)
+                begin
+                    if(s_axi_awvalid && s_axi_awready)
+                    begin
+                        wdata_raw_received  <= 1'b0;
+
+                        wdata_received  <= 1'b1;
+                        wdata_hold      <= wdata_raw_hold >> ((s_axi_awaddr[DATA_W_BYTES_CLOG2-1:0])*8); // awaddr_hold flop isn't ready at this point, so use the input combi val
+                        wstrb_hold      <= wstrb_raw_hold >> (s_axi_awaddr[DATA_W_BYTES_CLOG2-1:0]); // awaddr_hold flop isn't ready at this point, so use the input combi val
+                    end
+                end
+                
+                else if((w_valid_from_axi && w_ready_to_axi) || w_error_detected)
+                begin
+                    wdata_received  <= 1'b0;
+                end
             end
-            
-            else if(w_valid_from_axi && w_ready_to_axi)
+
+        // wdata raw
+            else
             begin
-                wdata_received  <= 1'b0;
+                if(s_axi_wvalid && s_axi_wready)
+                begin
+                    wdata_received  <= 1'b1;
+                    wdata_hold      <= s_axi_wdata;
+                    wstrb_hold      <= s_axi_wstrb;
+                end
+                
+                else if((w_valid_from_axi && w_ready_to_axi) || w_error_detected)
+                begin
+                    wdata_received  <= 1'b0;
+                end
             end
 
         // wlock
@@ -232,6 +298,12 @@ module axilite_s #(
                 bresp_received  <= 1'b1;
                 bresp_hold      <= b_resp_to_axi;
             end
+
+            else if(w_error_detected)
+            begin
+                bresp_received  <= 1'b1;
+                bresp_hold      <= 2'b10;
+            end
             
             else if(s_axi_bvalid && s_axi_bready)
             begin
@@ -245,14 +317,31 @@ module axilite_s #(
         s_axi_awready   = ~awaddr_received;
         s_axi_wready    = ~wdata_received;
 
-        w_valid_from_axi = ~wlock && awaddr_received && wdata_received;
-        w_addr_from_axi = awaddr_hold;
+        awaddr_raw_align = (~ALIGN_TRANSACTION) ? 1'b0 : awaddr_hold[DATA_W_BYTES_CLOG2-1:0];
+
+        w_addr_from_axi = (~ALIGN_TRANSACTION) ? awaddr_hold : {awaddr_hold[ADDR_W-1:DATA_W_BYTES_CLOG2],{DATA_W_BYTES_CLOG2{1'b0}}};
         w_data_from_axi = wdata_hold;
         w_strb_from_axi = wstrb_hold;
 
-        b_ready_from_axi = wlock;
+        w_valid_from_axi = ~wlock && awaddr_received && wdata_received && ~w_boundary_violation;
+
+        b_ready_from_axi = wlock && ~bresp_received;
         s_axi_bvalid = bresp_received;
         s_axi_bresp = bresp_hold;
+
+        if(ALIGN_TRANSACTION)
+        begin
+            w_boundary_check = {1'b0, ({awaddr_hold[MEM_BOUNDARY_BYTES_CLOG2-1:DATA_W_BYTES_CLOG2], {(DATA_W_BYTES_CLOG2-1){1'b0}}})} + (DATA_W_BYTES-1);
+        end
+
+        else
+        begin
+            w_boundary_check = {1'b0, awaddr_hold[MEM_BOUNDARY_BYTES_CLOG2-1:0]} + (DATA_W_BYTES-1);
+        end
+    
+        w_boundary_violation = w_boundary_check[MEM_BOUNDARY_BYTES_CLOG2];
+
+        w_error_detected = (w_boundary_violation & ~wlock) && awaddr_received && wdata_received && ~bresp_received;
     end
 
 // read handling
