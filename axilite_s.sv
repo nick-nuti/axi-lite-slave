@@ -43,15 +43,15 @@ axilite_s #(
 
     .b_resp_to_axi(),
 // user read
-    .ar_ready_to_axi(),
-    .ar_valid_from_axi(),
+    .r_ready_to_axi(),
+    .r_valid_from_axi(),
 
-    .ar_addr_from_axi(),
-    .r_ready_from_axi(),
-    .r_valid_to_axi(),
+    .r_addr_from_axi(),
+    .rr_ready_from_axi(),
+    .rr_valid_to_axi(),
 
-    .r_data_to_axi(),
-    .r_resp_to_axi()
+    .rr_data_to_axi(),
+    .rr_resp_to_axi()
 );
 */
 
@@ -99,15 +99,15 @@ module axilite_s #(
 
     b_resp_to_axi,
 // user read
-    ar_ready_to_axi,
-    ar_valid_from_axi,
+    r_ready_to_axi,
+    r_valid_from_axi,
 
-    ar_addr_from_axi,
-    r_ready_from_axi,
-    r_valid_to_axi,
+    r_addr_from_axi,
+    rr_ready_from_axi,
+    rr_valid_to_axi,
 
-    r_data_to_axi,
-    r_resp_to_axi
+    rr_data_to_axi,
+    rr_resp_to_axi
 );
 
     localparam STRB_W = DATA_W/8;
@@ -153,16 +153,16 @@ module axilite_s #(
 
     input  logic [RESP_W-1:0]   b_resp_to_axi;
 // user read
-    input  logic                ar_ready_to_axi;
-    output logic                ar_valid_from_axi;
+    input  logic                r_ready_to_axi;
+    output logic                r_valid_from_axi;
 
-    output logic [ADDR_W-1:0]   ar_addr_from_axi;
+    output logic [ADDR_W-1:0]   r_addr_from_axi;
     
-    output logic                r_ready_from_axi;
-    input  logic                r_valid_to_axi;
+    output logic                rr_ready_from_axi;
+    input  logic                rr_valid_to_axi;
 
-    input  logic [DATA_W-1:0]   r_data_to_axi;
-    input  logic [RESP_W-1:0]   r_resp_to_axi;
+    input  logic [DATA_W-1:0]   rr_data_to_axi;
+    input  logic [RESP_W-1:0]   rr_resp_to_axi;
 
     localparam ALIGN_TRANSACTION = (AUTO_ALIGN > 0) ? 1 : 0;
     
@@ -182,7 +182,6 @@ module axilite_s #(
     logic wdata_raw_received;
     logic [DATA_W-1:0] wdata_raw_hold;
     logic [STRB_W-1:0] wstrb_raw_hold;
-    logic [DATA_W_BYTES_CLOG2-1:0] awaddr_raw_align;
 
     logic wlock;
 
@@ -191,7 +190,7 @@ module axilite_s #(
 
     logic w_error_detected;
 
-    always_ff @ (posedge aclk)
+    always_ff @ (posedge aclk or negedge aresetn)
     begin
         if(~aresetn)
         begin
@@ -235,8 +234,15 @@ module axilite_s #(
                     if(awaddr_received)
                     begin
                         wdata_received  <= 1'b1;
-                        wdata_hold      <= s_axi_wdata >> (awaddr_raw_align*8);
-                        wstrb_hold      <= s_axi_wstrb >> awaddr_raw_align;
+                        wdata_hold      <= s_axi_wdata >> ((awaddr_hold[DATA_W_BYTES_CLOG2-1:0])*8);
+                        wstrb_hold      <= s_axi_wstrb >> (awaddr_hold[DATA_W_BYTES_CLOG2-1:0]);
+                    end
+
+                    else if(s_axi_awvalid && s_axi_awready)
+                    begin
+                        wdata_received  <= 1'b1;
+                        wdata_hold      <= s_axi_wdata >> ((s_axi_awaddr[DATA_W_BYTES_CLOG2-1:0])*8);
+                        wstrb_hold      <= s_axi_wstrb >> (s_axi_awaddr[DATA_W_BYTES_CLOG2-1:0]);
                     end
 
                     else
@@ -249,7 +255,16 @@ module axilite_s #(
 
                 else if(wdata_raw_received)
                 begin
-                    if(s_axi_awvalid && s_axi_awready)
+                    if(awaddr_received)
+                    begin
+                        wdata_raw_received  <= 1'b0;
+
+                        wdata_received  <= 1'b1;
+                        wdata_hold      <= wdata_raw_hold >> ((awaddr_hold[DATA_W_BYTES_CLOG2-1:0])*8);
+                        wstrb_hold      <= wstrb_raw_hold >> (awaddr_hold[DATA_W_BYTES_CLOG2-1:0]);
+                    end
+
+                    else if(s_axi_awvalid && s_axi_awready)
                     begin
                         wdata_raw_received  <= 1'b0;
 
@@ -296,7 +311,7 @@ module axilite_s #(
             if(b_valid_to_axi && b_ready_from_axi)
             begin
                 bresp_received  <= 1'b1;
-                bresp_hold      <= b_resp_to_axi;
+                bresp_hold      <= (b_resp_to_axi != 2'b01) ? b_resp_to_axi : 2'b10;
             end
 
             else if(w_error_detected)
@@ -315,9 +330,7 @@ module axilite_s #(
     always_comb
     begin
         s_axi_awready   = ~awaddr_received;
-        s_axi_wready    = ~wdata_received;
-
-        awaddr_raw_align = (~ALIGN_TRANSACTION) ? 1'b0 : awaddr_hold[DATA_W_BYTES_CLOG2-1:0];
+        s_axi_wready    = (~ALIGN_TRANSACTION) ? ~wdata_received : (~wdata_received && ~wdata_raw_received);
 
         w_addr_from_axi = (~ALIGN_TRANSACTION) ? awaddr_hold : {awaddr_hold[ADDR_W-1:DATA_W_BYTES_CLOG2],{DATA_W_BYTES_CLOG2{1'b0}}};
         w_data_from_axi = wdata_hold;
@@ -331,7 +344,7 @@ module axilite_s #(
 
         if(ALIGN_TRANSACTION)
         begin
-            w_boundary_check = {1'b0, ({awaddr_hold[MEM_BOUNDARY_BYTES_CLOG2-1:DATA_W_BYTES_CLOG2], {(DATA_W_BYTES_CLOG2-1){1'b0}}})} + (DATA_W_BYTES-1);
+            w_boundary_check = {1'b0, ({awaddr_hold[MEM_BOUNDARY_BYTES_CLOG2-1:DATA_W_BYTES_CLOG2], {(DATA_W_BYTES_CLOG2){1'b0}}})} + (DATA_W_BYTES-1);
         end
 
         else
@@ -344,6 +357,7 @@ module axilite_s #(
         w_error_detected = (w_boundary_violation & ~wlock) && awaddr_received && wdata_received && ~bresp_received;
     end
 
+
 // read handling
     logic araddr_received, rresp_received;
 
@@ -352,9 +366,17 @@ module axilite_s #(
     logic [DATA_W-1:0] rdata_hold;
     logic [RESP_W-1:0] rresp_hold;
 
+    // auto align components
+    logic [DATA_W_BYTES_CLOG2-1:0] araddr_raw_align_stg1, araddr_raw_align_stg2; // needs to be applied to the read response at the backdoor
+
     logic rlock;
 
-    always_ff @ (posedge aclk)
+    logic [MEM_BOUNDARY_BYTES_CLOG2:0] r_boundary_check;
+    logic r_boundary_violation;
+
+    logic r_error_detected;
+
+    always_ff @ (posedge aclk or negedge aresetn)
     begin
         if(~aresetn)
         begin
@@ -364,6 +386,9 @@ module axilite_s #(
             rresp_received  <= 1'b0;
             rdata_hold      <= 'h0;
             rresp_hold      <= 'h0;
+
+            araddr_raw_align_stg1    <= 'h0;
+            araddr_raw_align_stg2    <= 'h0;
 
             rlock <= 1'b0;
         end
@@ -378,28 +403,37 @@ module axilite_s #(
                 araddr_hold     <= s_axi_araddr;
             end
 
-            else if(ar_valid_from_axi && ar_ready_to_axi)
+            else if((r_valid_from_axi && r_ready_to_axi) || r_error_detected)
             begin
                 araddr_received <= 1'b0;
             end
 
         // rlock
-            if(ar_valid_from_axi && ar_ready_to_axi)
+            if(r_valid_from_axi && r_ready_to_axi)
             begin
                 rlock <= 1'b1;
+                if(ALIGN_TRANSACTION) araddr_raw_align_stg1 <= araddr_hold[DATA_W_BYTES_CLOG2-1:0];
             end
 
-            else if(r_valid_to_axi && r_ready_from_axi)
+            else if(rr_valid_to_axi && rr_ready_from_axi)
             begin
                 rlock <= 1'b0;
+                if(ALIGN_TRANSACTION) araddr_raw_align_stg2 <= araddr_raw_align_stg1;
             end
 
         // resp
-            if(r_valid_to_axi && r_ready_from_axi)
+            if(rr_valid_to_axi && rr_ready_from_axi)
             begin
                 rresp_received  <= 1'b1;
-                rdata_hold      <= r_data_to_axi;
-                rresp_hold      <= r_resp_to_axi;
+                rdata_hold      <= rr_data_to_axi;
+                rresp_hold      <= (rr_resp_to_axi != 2'b01) ? rr_resp_to_axi : 2'b10;
+            end
+
+            else if(r_error_detected)
+            begin
+                rresp_received  <= 1'b1;
+                rdata_hold      <= 'h0;
+                rresp_hold      <= 2'b10;
             end
 
             else if(s_axi_rvalid && s_axi_rready)
@@ -413,13 +447,27 @@ module axilite_s #(
     begin
         s_axi_arready = ~araddr_received;
 
-        ar_valid_from_axi = ~rlock && araddr_received;
-        ar_addr_from_axi = araddr_hold;
+        r_valid_from_axi = ~rlock && araddr_received && ~r_boundary_violation;
+        r_addr_from_axi = (~ALIGN_TRANSACTION) ? araddr_hold : {araddr_hold[ADDR_W-1:DATA_W_BYTES_CLOG2],{DATA_W_BYTES_CLOG2{1'b0}}};
 
-        r_ready_from_axi = rlock;
+        rr_ready_from_axi = rlock && ~rresp_received;
         s_axi_rvalid = rresp_received;
-        s_axi_rdata = rdata_hold;
+        s_axi_rdata = rdata_hold << (araddr_raw_align_stg2 * 8);
         s_axi_rresp = rresp_hold;
+
+        if(ALIGN_TRANSACTION)
+        begin
+            r_boundary_check = {1'b0, ({araddr_hold[MEM_BOUNDARY_BYTES_CLOG2-1:DATA_W_BYTES_CLOG2], {(DATA_W_BYTES_CLOG2){1'b0}}})} + (DATA_W_BYTES-1);
+        end
+
+        else
+        begin
+            r_boundary_check = {1'b0, araddr_hold[MEM_BOUNDARY_BYTES_CLOG2-1:0]} + (DATA_W_BYTES-1);
+        end
+    
+        r_boundary_violation = r_boundary_check[MEM_BOUNDARY_BYTES_CLOG2];
+
+        r_error_detected = (r_boundary_violation & ~rlock) && araddr_received && ~rresp_received;
     end
 
 endmodule
