@@ -1,4 +1,4 @@
-/* // Instantiation template
+/*
 axilite_s #(
     .ADDR_W(32), 
     .DATA_W(64)
@@ -41,15 +41,15 @@ axilite_s #(
 
     .b_resp_to_axi(),
 // user read
-    .ar_ready_to_axi(),
-    .ar_valid_from_axi(),
+    .r_ready_to_axi(),
+    .r_valid_from_axi(),
 
-    .ar_addr_from_axi(),
-    .r_ready_from_axi(),
-    .r_valid_to_axi(),
+    .r_addr_from_axi(),
+    .rr_ready_from_axi(),
+    .rr_valid_to_axi(),
 
-    .r_data_to_axi(),
-    .r_resp_to_axi()
+    .rr_data_to_axi(),
+    .rr_resp_to_axi()
 );
 */
 
@@ -95,15 +95,15 @@ module axilite_s #(
 
     b_resp_to_axi,
 // user read
-    ar_ready_to_axi,
-    ar_valid_from_axi,
+    r_ready_to_axi,
+    r_valid_from_axi,
 
-    ar_addr_from_axi,
-    r_ready_from_axi,
-    r_valid_to_axi,
+    r_addr_from_axi,
+    rr_ready_from_axi,
+    rr_valid_to_axi,
 
-    r_data_to_axi,
-    r_resp_to_axi
+    rr_data_to_axi,
+    rr_resp_to_axi
 );
 
     localparam STRB_W = DATA_W/8;
@@ -149,29 +149,28 @@ module axilite_s #(
 
     input  logic [RESP_W-1:0]   b_resp_to_axi;
 // user read
-    input  logic                ar_ready_to_axi;
-    output logic                ar_valid_from_axi;
+    input  logic                r_ready_to_axi;
+    output logic                r_valid_from_axi;
 
-    output logic [ADDR_W-1:0]   ar_addr_from_axi;
+    output logic [ADDR_W-1:0]   r_addr_from_axi;
     
-    output logic                r_ready_from_axi;
-    input  logic                r_valid_to_axi;
+    output logic                rr_ready_from_axi;
+    input  logic                rr_valid_to_axi;
 
-    input  logic [DATA_W-1:0]   r_data_to_axi;
-    input  logic [RESP_W-1:0]   r_resp_to_axi;
-
+    input  logic [DATA_W-1:0]   rr_data_to_axi;
+    input  logic [RESP_W-1:0]   rr_resp_to_axi;
+    
 
 // write handling
     logic awaddr_received, wdata_received, bresp_received;
     logic [ADDR_W-1:0] awaddr_hold;
     logic [DATA_W-1:0] wdata_hold;
     logic [STRB_W-1:0] wstrb_hold;
-
     logic [RESP_W-1:0] bresp_hold;
 
     logic wlock;
 
-    always_ff @ (posedge aclk)
+    always_ff @ (posedge aclk or negedge aresetn)
     begin
         if(~aresetn)
         begin
@@ -190,8 +189,7 @@ module axilite_s #(
 
         else
         begin
-        
-        // command
+        // waddr
             if(s_axi_awvalid && s_axi_awready)
             begin
                 awaddr_received <= 1'b1;
@@ -203,6 +201,7 @@ module axilite_s #(
                 awaddr_received <= 1'b0;
             end
 
+        // wdata raw
             if(s_axi_wvalid && s_axi_wready)
             begin
                 wdata_received  <= 1'b1;
@@ -230,7 +229,7 @@ module axilite_s #(
             if(b_valid_to_axi && b_ready_from_axi)
             begin
                 bresp_received  <= 1'b1;
-                bresp_hold      <= b_resp_to_axi;
+                bresp_hold      <= (b_resp_to_axi != 2'b01) ? b_resp_to_axi : 2'b10;
             end
             
             else if(s_axi_bvalid && s_axi_bready)
@@ -245,15 +244,18 @@ module axilite_s #(
         s_axi_awready   = ~awaddr_received;
         s_axi_wready    = ~wdata_received;
 
-        w_valid_from_axi = ~wlock && awaddr_received && wdata_received;
         w_addr_from_axi = awaddr_hold;
         w_data_from_axi = wdata_hold;
         w_strb_from_axi = wstrb_hold;
 
-        b_ready_from_axi = wlock;
+        w_valid_from_axi = ~wlock && awaddr_received && wdata_received;
+
+        b_ready_from_axi = wlock && ~bresp_received;
         s_axi_bvalid = bresp_received;
         s_axi_bresp = bresp_hold;
+
     end
+
 
 // read handling
     logic araddr_received, rresp_received;
@@ -265,7 +267,9 @@ module axilite_s #(
 
     logic rlock;
 
-    always_ff @ (posedge aclk)
+    logic r_error_detected;
+
+    always_ff @ (posedge aclk or negedge aresetn)
     begin
         if(~aresetn)
         begin
@@ -289,28 +293,28 @@ module axilite_s #(
                 araddr_hold     <= s_axi_araddr;
             end
 
-            else if(ar_valid_from_axi && ar_ready_to_axi)
+            else if(r_valid_from_axi && r_ready_to_axi)
             begin
                 araddr_received <= 1'b0;
             end
 
         // rlock
-            if(ar_valid_from_axi && ar_ready_to_axi)
+            if(r_valid_from_axi && r_ready_to_axi)
             begin
                 rlock <= 1'b1;
             end
 
-            else if(r_valid_to_axi && r_ready_from_axi)
+            else if(rr_valid_to_axi && rr_ready_from_axi)
             begin
                 rlock <= 1'b0;
             end
 
         // resp
-            if(r_valid_to_axi && r_ready_from_axi)
+            if(rr_valid_to_axi && rr_ready_from_axi)
             begin
                 rresp_received  <= 1'b1;
-                rdata_hold      <= r_data_to_axi;
-                rresp_hold      <= r_resp_to_axi;
+                rdata_hold      <= rr_data_to_axi;
+                rresp_hold      <= (rr_resp_to_axi != 2'b01) ? rr_resp_to_axi : 2'b10;
             end
 
             else if(s_axi_rvalid && s_axi_rready)
@@ -324,10 +328,10 @@ module axilite_s #(
     begin
         s_axi_arready = ~araddr_received;
 
-        ar_valid_from_axi = ~rlock && araddr_received;
-        ar_addr_from_axi = araddr_hold;
+        r_valid_from_axi = ~rlock && araddr_received;
+        r_addr_from_axi = araddr_hold;
 
-        r_ready_from_axi = rlock;
+        rr_ready_from_axi = rlock && ~rresp_received;
         s_axi_rvalid = rresp_received;
         s_axi_rdata = rdata_hold;
         s_axi_rresp = rresp_hold;
