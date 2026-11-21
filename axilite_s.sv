@@ -168,8 +168,6 @@ module axilite_s #(
     logic [STRB_W-1:0] wstrb_hold;
     logic [RESP_W-1:0] bresp_hold;
 
-    logic wlock;
-
     always_ff @ (posedge aclk or negedge aresetn)
     begin
         if(~aresetn)
@@ -183,8 +181,6 @@ module axilite_s #(
 
             bresp_received  <= 1'b0;
             bresp_hold      <= 'h0;
-
-            wlock <= 1'b0;
         end
 
         else
@@ -214,17 +210,6 @@ module axilite_s #(
                 wdata_received  <= 1'b0;
             end
 
-        // wlock
-            if(w_valid_from_axi && w_ready_to_axi)
-            begin
-                wlock <= 1'b1;
-            end
-
-            else if(b_valid_to_axi && b_ready_from_axi)
-            begin
-                wlock <= 1'b0;
-            end
-
         // resp
             if(b_valid_to_axi && b_ready_from_axi)
             begin
@@ -241,18 +226,18 @@ module axilite_s #(
 
     always_comb
     begin
-        s_axi_awready   = ~awaddr_received;
-        s_axi_wready    = ~wdata_received;
+        s_axi_awready   = aresetn && (~awaddr_received || (w_valid_from_axi && w_ready_to_axi)); // allows for signal to be ready immediately when packet is consumed by ip
+        s_axi_wready    = aresetn && (~wdata_received  || (w_valid_from_axi && w_ready_to_axi)); // allows for signal to be ready immediately when packet is consumed by ip
 
         w_addr_from_axi = awaddr_hold;
         w_data_from_axi = wdata_hold;
         w_strb_from_axi = wstrb_hold;
 
-        w_valid_from_axi = ~wlock && awaddr_received && wdata_received;
+        w_valid_from_axi = aresetn && awaddr_received && wdata_received;
 
-        b_ready_from_axi = wlock && ~bresp_received;
-        s_axi_bvalid = bresp_received;
-        s_axi_bresp = bresp_hold;
+        b_ready_from_axi    = aresetn && (~bresp_received || (s_axi_bvalid && s_axi_bready));
+        s_axi_bvalid        = aresetn && bresp_received;
+        s_axi_bresp         = bresp_hold;
 
     end
 
@@ -265,10 +250,6 @@ module axilite_s #(
     logic [DATA_W-1:0] rdata_hold;
     logic [RESP_W-1:0] rresp_hold;
 
-    logic rlock;
-
-    logic r_error_detected;
-
     always_ff @ (posedge aclk or negedge aresetn)
     begin
         if(~aresetn)
@@ -279,8 +260,6 @@ module axilite_s #(
             rresp_received  <= 1'b0;
             rdata_hold      <= 'h0;
             rresp_hold      <= 'h0;
-
-            rlock <= 1'b0;
         end
 
         else
@@ -296,17 +275,6 @@ module axilite_s #(
             else if(r_valid_from_axi && r_ready_to_axi)
             begin
                 araddr_received <= 1'b0;
-            end
-
-        // rlock
-            if(r_valid_from_axi && r_ready_to_axi)
-            begin
-                rlock <= 1'b1;
-            end
-
-            else if(rr_valid_to_axi && rr_ready_from_axi)
-            begin
-                rlock <= 1'b0;
             end
 
         // resp
@@ -326,15 +294,27 @@ module axilite_s #(
 
     always_comb
     begin
-        s_axi_arready = ~araddr_received;
+        s_axi_arready = aresetn && (~araddr_received || (r_valid_from_axi && r_ready_to_axi));
 
-        r_valid_from_axi = ~rlock && araddr_received;
+        r_valid_from_axi = aresetn && araddr_received;
         r_addr_from_axi = araddr_hold;
 
-        rr_ready_from_axi = rlock && ~rresp_received;
-        s_axi_rvalid = rresp_received;
+        rr_ready_from_axi = aresetn && (~rresp_received || (s_axi_rvalid && s_axi_rready));
+        s_axi_rvalid = aresetn && rresp_received;
         s_axi_rdata = rdata_hold;
         s_axi_rresp = rresp_hold;
     end
+
+    // compile-time check
+
+    generate
+        // Requirements:
+        //      - axilite ip must have address width between 1 and 64
+        //      - axilite ip must have data width of 32 or 64
+        if ((ADDR_W < 1) || (ADDR_W > 64) || ((DATA_W != 32) && (DATA_W != 64)))
+        begin
+            INVALID_AXILITE_PARAMETER_CONFIGURATION invalid_axilite_ip_config();
+        end
+    endgenerate
 
 endmodule
